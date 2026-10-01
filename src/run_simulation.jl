@@ -78,10 +78,12 @@ end
 # Info printing on shell and file
 datestamp = Dates.format(now(), "YYYYmmdd-HHMMSS")
 
-if intmethod == :range
-    interaction_info = @sprintf "Interaction method: %s\nInteraction function: %s with parameters: %s\nRange: %.1f μm\nOffcenter: %s" intmethod int_func int_params intrange offcenter
-elseif intmethod == :voronoi
-    interaction_info = @sprintf "Interaction method: %s\nInteraction function: %s with parameters: %s\nOffcenter: %s" intmethod int_func int_params offcenter
+if int_method == :range
+    interaction_info = @sprintf "Interaction method: %s\nInteraction function: %s with parameters: %s\nRange: %.1f μm\nOffcenter: %s" int_method int_func int_params intrange offcenter
+elseif int_method == :voronoi
+    interaction_info = @sprintf "Interaction method: %s\nInteraction function: %s with parameters: %s\nOffcenter: %s" int_method int_func int_params offcenter
+else
+    error("Unknown int_method: $int_method. Use :range or :voronoi.")
 end
 
 infos = @sprintf "%s\nBox shape: %s\nNumber of particles = %i\nNumber density = %s μm⁻²\nR=%.1f μm \nT = %.1f (K)\nv=%s (μm/s) \nω=%s (rad/s)\nCharacteristic lengths: (a=%.1f b=%.1f) μm\npf=%s\nIntegration step: dt=%.0e s \nSimulation downsampling: %i\nNumber of steps: Nt=%.1e\nTotal simulated time T_tot = %.2e s\n\n%s" datestamp box_shape Np density R T v ω a b packing_fraction δt measevery  Nt T_tot interaction_info
@@ -130,7 +132,7 @@ for i in 1:ICS
             )  
             CSV.write(datafname, data, append = true)
         end
-        ABPE =update_heun(ABPE,matrices,δt, offcenter, int_func , int_params...; method=intmethod, range=intrange)
+        ABPE =update_heun(ABPE,matrices,δt, offcenter, int_func , int_params...; method=int_method, range=intrange)
         if nt % (Nt÷100) == 0
             elapsed = Dates.canonicalize(Dates.round((now()-start), Dates.Second))
             print("$((100*nt÷Nt))%... Step $nt, total elapsed time $(elapsed)\r")

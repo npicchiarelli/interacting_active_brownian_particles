@@ -60,7 +60,7 @@ end
 function interaction_voronoi(xy::Array{Float64, 2}, θ::Array{Float64,1}, oc_length::Float64, L::Real, Np::Int, int_func::Function, int_params...)
     #Step 1: Get the tessellation
 
-    rect = Rect(Point2(-L/2, -L/2), Point2(L/2, L/2))
+    rect = Rectangle(Point2(-L/2, -L/2), Point2(L/2, L/2))
 
     tess = voronoicells(xy_to_points(xy), rect)
 
@@ -73,7 +73,7 @@ function interaction_voronoi(xy::Array{Float64, 2}, θ::Array{Float64,1}, oc_len
     # Get the rectangle of the periodic projection
     minpoint = Point2(minimum(xy_periodic_projection[:,1]), minimum(xy_periodic_projection[:,2]))
     maxpoint = Point2(maximum(xy_periodic_projection[:,1]), maximum(xy_periodic_projection[:,2]))
-    rect_periodic = Rect(minpoint, maxpoint)
+    rect_periodic = Rectangle(minpoint, maxpoint)
     tess_periodic = voronoicells(xy_to_points(xy_periodic_projection), rect_periodic)
 
     # Step 3: Get the adjacency from the periodic tessellation
