@@ -6,7 +6,8 @@ include("interactions.jl")
 
 # Functions to update particles for the next step
 
-function update_heun(abpe::ABPE, matrices::Tuple{Matrix{Float64}, BitMatrix, BitMatrix}, δt::Float64, offcenter::Float64, range::Float64, int_func::Function, int_params...) where {ABPE <: ABPsEnsemble}
+function update_heun(abpe::ABPE, matrices, δt, offcenter,  int_func::Function, int_params...; 
+                     method::Symbol=:range, range::Float64=0.0) where {ABPE <: ABPsEnsemble}
 
     δp_i = Array{Float64,2}(undef,abpe.Np,2)
     δθ_i = Array{Float64,1}(undef,abpe.Np)
@@ -18,9 +19,15 @@ function update_heun(abpe::ABPE, matrices::Tuple{Matrix{Float64}, BitMatrix, Bit
     
     #intermediate step
     if (!isapprox(offcenter,0.0))
-        f_i, t_i = force_torque(position(abpe), orientation(abpe), abpe.L, oc_length, range, int_func, int_params...)
+        f_i, t_i = force_torque(position(abpe), orientation(abpe), abpe.L, oc_length, int_func, int_params...; method, range)
     else
-        f_i = interactions_range(position(abpe), abpe.L, range, abpe.Np, int_func, int_params...)
+        if method == :range
+            f_i = interactions_range(position(abpe), abpe.L, range, abpe.Np, int_func, int_params...)
+        elseif method == :voronoi
+            f_i = interaction_voronoi(position(abpe), orientation(abpe), oc_length, abpe.L, abpe.Np, int_func, int_params...)
+        else
+            throw(ArgumentError("Unknown method: $method. Use :range or :voronoi."))
+        end
         t_i = zeros(abpe.Np)
     end 
 
@@ -35,9 +42,15 @@ function update_heun(abpe::ABPE, matrices::Tuple{Matrix{Float64}, BitMatrix, Bit
 
     #final step
     if (!isapprox(offcenter,0.0))
-        f_f, t_f = force_torque(pθ_i..., abpe.L, oc_length, range, int_func, int_params...)
+        f_f, t_f = force_torque(pθ_i..., abpe.L, oc_length, int_func, int_params...; method, range)
     else
-        f_f = interactions_range(pθ_i[1], abpe.L, range, abpe.Np, int_func, int_params...)
+        if method == :range
+            f_f = interactions_range(pθ_i[1], abpe.L, range, abpe.Np, int_func, int_params...) 
+        elseif method == :voronoi
+             f_f = interaction_voronoi(pθ_i[1], pθ_i[2], oc_length, abpe.L, abpe.Np, int_func, int_params...)             
+        else
+            throw(ArgumentError("Unknown method: $method. Use :range or :voronoi."))
+        end
         t_f = zeros(abpe.Np)
     end 
 

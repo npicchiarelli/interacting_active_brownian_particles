@@ -1,5 +1,7 @@
 #Functions to apply interactions in ABPs systems
 using Distances
+using GeometryBasics
+using VoronoiCells
 include("boundary_conditions.jl")
 include("force_functions.jl")
 include("initialization.jl")
@@ -37,11 +39,62 @@ function interactions_range(xy::Array{Float64, 2}, L::Float64, l::Float64, Np::I
     return ΣFtot
 end
 
+#Functions to calculate force vectors with voronoi rationale.
+function get_force_from_adjacency(adjacency::Set{Tuple{Int64, Int64}}, xy::Array{Float64, 2}, Np::Int, int_func::Function, int_params...)
+    ΣFtot = zeros(Float64, Np, 2)
+    for a in adjacency
+        # Since tuples are ordered and the set is composed starting from points inside the simulation box, we are sure that a[1] <= Np
+        dxy = xy[a[1],:] - xy[a[2],:]
+        dist = sqrt(sum(abs2, dxy))
+        dir = dxy / dist
+        force = int_func(dist, int_params...)
+        ΣFtot[a[1],:] .+= force * dir
+        # add the opposite force to the second point if it is within the simulation box
+        if a[2]<=Np
+            ΣFtot[a[2],:] .-= force * dir
+        end
+    end
+    return ΣFtot
+end
+
+function interaction_voronoi(xy::Array{Float64, 2}, θ::Array{Float64,1}, oc_length::Float64, L::Real, Np::Int, int_func::Function, int_params...)
+    #Step 1: Get the tessellation
+
+    rect = Rect(Point2(-L/2, -L/2), Point2(L/2, L/2))
+
+    tess = voronoicells(xy_to_points(xy), rect)
+
+    # Step 2: Get the periodic projection of the tessellation
+
+    xy_periodic_projection, proj_inds = find_boundary_points(xy, tess.Cells)
+    θ_pp = vcat(θ, θ[proj_inds])
+    xy_periodic_projection = vcat(xy, xy_periodic_projection)
+
+    # Get the rectangle of the periodic projection
+    minpoint = Point2(minimum(xy_periodic_projection[:,1]), minimum(xy_periodic_projection[:,2]))
+    maxpoint = Point2(maximum(xy_periodic_projection[:,1]), maximum(xy_periodic_projection[:,2]))
+    rect_periodic = Rect(minpoint, maxpoint)
+    tess_periodic = voronoicells(xy_to_points(xy_periodic_projection), rect_periodic)
+
+    # Step 3: Get the adjacency from the periodic tessellation
+    adjacency = get_adjacency_from_points(tess_periodic.Cells, Np)
+    
+    #Step 4: Compute the forces
+    xy_pp_oc = xy_periodic_projection .+ oc_length* [cos.(θ_pp) sin.(θ_pp)]
+    return get_force_from_adjacency(adjacency, xy_pp_oc, Np, int_func, int_params...)
+end
+
 #Function used to compute torques in aligning interactions
-function force_torque(xy::Array{Float64,2}, θ::Array{Float64,1}, L::Real, oc::Float64, range::Real, int_func::Function, int_params...) #Forces are retuned in μN, torques in μN×μm
-    xy_chgcen = xy .+ oc* [cos.(θ) sin.(θ)]
-    forces = interactions_range(xy_chgcen, L, range, size(xy,1), int_func, int_params...)
-    torques = oc*(forces[:,2] .* cos.(θ) .- forces[:,1] .* sin.(θ))
+function force_torque(xy, θ, L, oc_length, int_func, int_params...; method::Symbol=:range, range::Real=0.0)
+    if method == :voronoi
+        forces = interaction_voronoi(xy, θ, oc_length, L, size(xy,1), int_func, int_params...)
+    elseif method == :range
+        xy_chgcen = xy .+ oc_length * [cos.(θ) sin.(θ)]
+        forces = interactions_range(xy_chgcen, L, range, size(xy,1), int_func, int_params...)
+    else
+        throw(ArgumentError("Unknown method: $method. Use :range or :voronoi."))
+    end
+    torques = oc_length * (forces[:,2] .* cos.(θ) .- forces[:,1] .* sin.(θ))
     return forces, torques
 end
 

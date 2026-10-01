@@ -40,6 +40,28 @@ else
 end
 println("Loaded settings from $settings_file")
 
+# info_dict = Dict(
+#     "Box shape" => box_shape,
+#     "Np" => Np,
+#     "numdensity" => density,
+#     "R" => R,
+#     "T" => T,
+#     "v" => v,
+#     "ω" => ω,
+#     "a" => a,
+#     "b" => b,
+#     "pf" => packing_fraction,
+#     "dt" => δt,
+#     "measevery" => measevery,
+#     "Nt" => Nt,
+#     "T_tot" => T_tot,
+#     "int_func" => string(int_func),
+#     "int_params" => int_params,
+#     "offcenter" => offcenter,
+# )
+
+# JLD2.save(joinpath(simulation_folder, "siminfo_dict.jld2"), info_dict)
+
 # Preliminary calculations
 
 DT, DR, γ = diffusion_coeff(1e-6R,T).*[1e12, 1, 1] # Translational and Rotational diffusion coefficients, drag coefficient
@@ -56,7 +78,13 @@ end
 # Info printing on shell and file
 datestamp = Dates.format(now(), "YYYYmmdd-HHMMSS")
 
-infos = @sprintf "%s\nBox shape: %s\nNumber of particles = %i\nNumber density = %s μm⁻²\nR=%.1f μm \nT = %.1f (K)\nv=%s (μm/s) \nω=%s (rad/s)\nCharacteristic lengths: (a=%.1f b=%.1f) μm\npf=%s\nIntegration step: dt=%.0e s \nSimulation downsampling: %i\nNumber of steps: Nt=%.1e\nTotal simulated time T_tot = %.2e s\n\nInteraction function: %s with parameters: %s\nRange: %.1f μm\nOffcenter: %s" datestamp box_shape Np density R T v ω a b packing_fraction δt measevery  Nt T_tot int_func int_params intrange offcenter
+if intmethod == :range
+    interaction_info = @sprintf "Interaction method: %s\nInteraction function: %s with parameters: %s\nRange: %.1f μm\nOffcenter: %s" intmethod int_func int_params intrange offcenter
+elseif intmethod == :voronoi
+    interaction_info = @sprintf "Interaction method: %s\nInteraction function: %s with parameters: %s\nOffcenter: %s" intmethod int_func int_params offcenter
+end
+
+infos = @sprintf "%s\nBox shape: %s\nNumber of particles = %i\nNumber density = %s μm⁻²\nR=%.1f μm \nT = %.1f (K)\nv=%s (μm/s) \nω=%s (rad/s)\nCharacteristic lengths: (a=%.1f b=%.1f) μm\npf=%s\nIntegration step: dt=%.0e s \nSimulation downsampling: %i\nNumber of steps: Nt=%.1e\nTotal simulated time T_tot = %.2e s\n\n%s" datestamp box_shape Np density R T v ω a b packing_fraction δt measevery  Nt T_tot interaction_info
 
 println(infos)
 
@@ -102,7 +130,7 @@ for i in 1:ICS
             )  
             CSV.write(datafname, data, append = true)
         end
-        ABPE =update_heun(ABPE,matrices,δt, offcenter, intrange, int_func , int_params...)
+        ABPE =update_heun(ABPE,matrices,δt, offcenter, int_func , int_params...; method=intmethod, range=intrange)
         if nt % (Nt÷100) == 0
             elapsed = Dates.canonicalize(Dates.round((now()-start), Dates.Second))
             print("$((100*nt÷Nt))%... Step $nt, total elapsed time $(elapsed)\r")
