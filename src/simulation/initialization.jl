@@ -27,11 +27,12 @@ function initABPE(Np::Int64, L::Float64, R::Float64, T::Float64, vd::Union{Float
     (ωd isa Float64) ? ωd = [ωd] : Nt
     DT, DR = diffusion_coeff(1e-6R, T)
     xyθ = (rand(Np,3).-0.5).*repeat([L L 2π],Np)
-    xyθ[:,1:2], dists, superpose, uptriang = hardsphere_periodic(xyθ[:,1:2], R, L) #xyθ[:,1:2] gives x and y positions of intitial particles
+    xyθ[:,1:2], hardsphere_workspace = hardsphere_periodic(xyθ[:,1:2], R, L) #xyθ[:,1:2] gives x and y positions of intitial particles
     v = rand(vd, Np)
     ω = rand(ωd,Np)
     abpe = ABPE2( Np, L, R, T, v, ω, 1e12DT, DR, xyθ[:,1], xyθ[:,2], xyθ[:,3])
-    return abpe, (dists, superpose, uptriang)
+    # Buffers reused by update_heun at every step
+    return abpe, (hardsphere = hardsphere_workspace, range = RangeWorkspace(Np))
 end
 
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------------

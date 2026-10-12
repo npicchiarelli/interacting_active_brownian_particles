@@ -25,12 +25,20 @@ function parse_cl()
         "simfolder"
             help = "the path to the simulation folder"
             required = true
+        "--ic"
+            help = "the initial condition to run (0 runs all of them, one after another)"
+            arg_type = Int
+            default = 0
+        "--seed"
+            help = "seed of the random number generator; initial condition i uses seed + i (default: not seeded)"
+            arg_type = Int
     end
     return parse_args(s)
 end
 
 parsed_args = parse_cl()
 simulation_folder = parsed_args["simfolder"]
+base_seed = parsed_args["seed"]
 settings_file = joinpath(simulation_folder, "settings.jl")
 
 if isfile(settings_file)
@@ -90,30 +98,31 @@ infos = @sprintf "%s\nBox shape: %s\nNumber of particles = %i\nNumber density = 
 
 println(infos)
 
-for i in 1:ICS
+# Runs initial condition i, writing it in the folder run$i
+function run_ic(i)
     pathf= joinpath(simulation_folder, "run$i")
-        if !isdir(pathf)
-            mkdir(pathf)
-        else
-            @warn "Directory $pathf already exists. Contents will be overwritten."
-            rm(pathf, recursive=true, force = true)
-            mkdir(pathf)
-        end
-        filename= "simulation"*"_run$i"
-        filepath = joinpath(pathf, filename)
+    if !isdir(pathf)
+        mkdir(pathf)
+    else
+        @warn "Directory $pathf already exists. Contents will be overwritten."
+        rm(pathf, recursive=true, force = true)
+        mkdir(pathf)
+    end
+    filename= "simulation"*"_run$i"
+    filepath = joinpath(pathf, filename)
 
-        datafname = filepath*".txt"
+    datafname = filepath*".txt"
 
-        # Simulation and file storage
-        open(datafname, "w") do infile
-            writedlm(infile, ["N" "Time" "xpos" "ypos" "orientation" "omega"], ",")
-        end
+    # Simulation and file storage
+    open(datafname, "w") do infile
+        writedlm(infile, ["N" "Time" "xpos" "ypos" "orientation" "omega"], ",")
+    end
 
-        start = now()
-        @info "$(start) Started simulation #$i"
+    start = now()
+    @info "$(start) Started simulation #$i"
 
-
-    ABPE, matrices = initABPE( Np, L, R, T, v, ω, int_func, offcenter, intrange, int_params...,)
+    base_seed === nothing || Random.seed!(base_seed + i)
+    ABPE, workspace = initABPE( Np, L, R, T, v, ω, int_func, offcenter, intrange, int_params...,)
     if int_func == lennard_jones
         offcenter_nosuperpose!(ABPE, δt, offcenter, 2R+1e-3, int_func, int_params...)
     end
@@ -129,14 +138,20 @@ for i in 1:ICS
                 ypos= ABPE.y,
                 orientation=ABPE.θ,
                 omega=ABPE.ω,
-            )  
+            )
             CSV.write(datafname, data, append = true)
         end
-        ABPE =update_heun(ABPE,matrices,δt, offcenter, int_func , int_params...; method=int_method, range=intrange)
+        ABPE =update_heun(ABPE,workspace,δt, offcenter, int_func , int_params...; method=int_method, range=intrange)
         if nt % (Nt÷100) == 0
             elapsed = Dates.canonicalize(Dates.round((now()-start), Dates.Second))
             print("$((100*nt÷Nt))%... Step $nt, total elapsed time $(elapsed)\r")
         end
     end
     @info "$(now()) Simulation and file writing finished"
+end
+
+ic = parsed_args["ic"]
+0 <= ic <= ICS || error("--ic must be between 1 and ICS = $ICS, or 0 to run all of them; got $ic")
+for i in (ic == 0 ? (1:ICS) : (ic:ic))
+    run_ic(i)
 end

@@ -6,7 +6,7 @@ include("interactions.jl")
 
 # Functions to update particles for the next step
 
-function update_heun(abpe::ABPE, matrices, δt, offcenter,  int_func::Function, int_params...; 
+function update_heun(abpe::ABPE, workspace, δt, offcenter,  int_func::Function, int_params...;
                      method::Symbol=:range, range::Float64=0.0) where {ABPE <: ABPsEnsemble}
 
     δp_i = Array{Float64,2}(undef,abpe.Np,2)
@@ -19,10 +19,10 @@ function update_heun(abpe::ABPE, matrices, δt, offcenter,  int_func::Function, 
     
     #intermediate step
     if (!isapprox(offcenter,0.0))
-        f_i, t_i = force_torque(position(abpe), orientation(abpe), abpe.L, oc_length, int_func, int_params...; method, range)
+        f_i, t_i = force_torque(position(abpe), orientation(abpe), abpe.L, oc_length, int_func, int_params...; method, range, workspace=workspace.range)
     else
         if method == :range
-            f_i = interactions_range(position(abpe), abpe.L, range, abpe.Np, int_func, int_params...)
+            f_i = interactions_range(position(abpe), abpe.L, range, abpe.Np, int_func, int_params...; workspace=workspace.range)
         elseif method == :voronoi
             f_i = interaction_voronoi(position(abpe), orientation(abpe), oc_length, abpe.L, abpe.Np, int_func, int_params...)
         else
@@ -42,10 +42,10 @@ function update_heun(abpe::ABPE, matrices, δt, offcenter,  int_func::Function, 
 
     #final step
     if (!isapprox(offcenter,0.0))
-        f_f, t_f = force_torque(pθ_i..., abpe.L, oc_length, int_func, int_params...; method, range)
+        f_f, t_f = force_torque(pθ_i..., abpe.L, oc_length, int_func, int_params...; method, range, workspace=workspace.range)
     else
         if method == :range
-            f_f = interactions_range(pθ_i[1], abpe.L, range, abpe.Np, int_func, int_params...) 
+            f_f = interactions_range(pθ_i[1], abpe.L, range, abpe.Np, int_func, int_params...; workspace=workspace.range)
         elseif method == :voronoi
              f_f = interaction_voronoi(pθ_i[1], pθ_i[2], oc_length, abpe.L, abpe.Np, int_func, int_params...)             
         else
@@ -61,7 +61,7 @@ function update_heun(abpe::ABPE, matrices, δt, offcenter,  int_func::Function, 
     pθ = (position(abpe), orientation(abpe)) .+ (δp_f, δθ_f)
 
     periodic_BC_array!(pθ[1],abpe.L, abpe.Np)
-    hardsphere_periodic!(pθ[1], matrices[1], matrices[2],abpe.R, abpe.L)
+    hardsphere_periodic!(pθ[1], workspace.hardsphere, abpe.R, abpe.L)
 
     new_abpe = ABPE2( abpe.Np, abpe.L, abpe.R, abpe.T, abpe.v, abpe.ω, abpe.DT, abpe.DR, pθ[1][:,1], pθ[1][:,2], pθ[2] )
 
