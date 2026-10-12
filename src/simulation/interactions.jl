@@ -9,34 +9,71 @@ include(joinpath("..","utilities","geo_toolbox.jl"))
 
 #Function to calculate force vectors
 
-function interactions_range(xy::Array{Float64, 2}, L::Float64, l::Float64, Np::Int, int_func::Function, int_params...)
+# Buffers of the range forces for one chunk of particles, allocated once per simulation and reused at every step
+struct RangeBuffers
+    Δx::Vector{Float64}               # displacements and distances of the particles within range of one particle
+    Δy::Vector{Float64}
+    d::Vector{Float64}
+    forces::Vector{Matrix{Float64}}   # forces[n]: n×2 force terms of a particle with n neighbours, created when first needed
+    ΣF::Matrix{Float64}               # 1×2 sum of the force terms
+end
+RangeBuffers(Np::Int) = RangeBuffers(zeros(Np), zeros(Np), zeros(Np), Vector{Matrix{Float64}}(undef, Np), zeros(1,2))
+
+# One set of buffers per thread
+RangeWorkspace(Np::Int) = [RangeBuffers(Np) for _ in 1:min(nthreads(), Np)]
+
+function interactions_range(xy::Array{Float64, 2}, L::Float64, l::Float64, Np::Int, int_func::Function, int_params...; workspace::Vector{RangeBuffers}=RangeWorkspace(Np))
     # Preallocate the result array for efficiency
     ΣFtot = zeros(Float64, Np, 2)
-    
-    @threads for i in axes(xy,1)
-        # Compute distances and apply periodic boundary conditions
-        xy_shifted = xy .- [xy[i,1] xy[i,2]]
-        periodic_BC_array!(xy_shifted, L, Np)
-        xy_nonzero = @view xy_shifted[1:end .!=i, :]
+    nchunks = length(workspace)
 
-        dists = d2(xy_nonzero)
-        inside = vec(dists .<= l)
-        # If no particles are inside the interaction range, force remains zero
-        !any(inside) && continue
-        xy_inside = @view xy_nonzero[inside, :]
-        dirs = zeros(Float64, sum(inside), 2)
-
-        # Compute distances and interaction forces
-        dists_nonzero = @view dists[inside]
-        forces = int_func.(dists_nonzero, int_params...)
-        
-        # Compute normalized direction vectors
-        dirs .= xy_inside ./ dists_nonzero
-
-        # Sum forces for each direction and assign to ΣFtot
-        ΣFtot[i, :] = -sum(forces .* dirs, dims=1)'
+    @threads for c in 1:nchunks
+        range_forces!(ΣFtot, c:nchunks:Np, xy, L, l, int_func, int_params, workspace[c])
     end
     return ΣFtot
+end
+
+# Total force on each particle in `particles` from all the particles within range l, written in ΣFtot
+function range_forces!(ΣFtot::Array{Float64, 2}, particles, xy::Array{Float64, 2}, L::Float64, l::Float64, int_func::Function, int_params::Tuple, buffers::RangeBuffers)
+    Np = size(xy,1)
+    # Displacements and distances of the particles inside the interaction range
+    Δx_in, Δy_in, d_in = buffers.Δx, buffers.Δy, buffers.d
+
+    for i in particles
+        n = 0
+        for j in 1:Np
+            j == i && continue
+            # Compute distances and apply periodic boundary conditions, as in periodic_BC_array!
+            Δx = xy[j,1] - xy[i,1]
+            Δy = xy[j,2] - xy[i,2]
+            if abs(Δx) > L/2
+                Δx = Δx - sign(Δx) * L
+            end
+            if abs(Δy) > L/2
+                Δy = Δy - sign(Δy) * L
+            end
+            d = sqrt(abs2(Δx) + abs2(Δy))
+            if d <= l
+                n += 1
+                Δx_in[n], Δy_in[n], d_in[n] = Δx, Δy, d
+            end
+        end
+        # If no particles are inside the interaction range, force remains zero
+        n == 0 && continue
+
+        isassigned(buffers.forces, n) || (buffers.forces[n] = Matrix{Float64}(undef, n, 2))
+        forces = buffers.forces[n]
+        for k in 1:n
+            f = int_func(d_in[k], int_params...)
+            forces[k,1] = f * (Δx_in[k] / d_in[k])
+            forces[k,2] = f * (Δy_in[k] / d_in[k])
+        end
+        # Summing an n×2 Matrix over dims=1 adds the terms in the same order as the original sum(forces .* dirs, dims=1)
+        sum!(buffers.ΣF, forces)
+        ΣFtot[i,1] = -buffers.ΣF[1]
+        ΣFtot[i,2] = -buffers.ΣF[2]
+    end
+    return nothing
 end
 
 #Functions to calculate force vectors with voronoi rationale.
@@ -85,12 +122,12 @@ function interaction_voronoi(xy::Array{Float64, 2}, θ::Array{Float64,1}, oc_len
 end
 
 #Function used to compute torques in aligning interactions
-function force_torque(xy, θ, L, oc_length, int_func, int_params...; method::Symbol=:range, range::Real=0.0)
+function force_torque(xy, θ, L, oc_length, int_func, int_params...; method::Symbol=:range, range::Real=0.0, workspace::Vector{RangeBuffers}=RangeWorkspace(size(xy,1)))
     if method == :voronoi
         forces = interaction_voronoi(xy, θ, oc_length, L, size(xy,1), int_func, int_params...)
     elseif method == :range
         xy_chgcen = xy .+ oc_length * [cos.(θ) sin.(θ)]
-        forces = interactions_range(xy_chgcen, L, range, size(xy,1), int_func, int_params...)
+        forces = interactions_range(xy_chgcen, L, range, size(xy,1), int_func, int_params...; workspace)
     else
         throw(ArgumentError("Unknown method: $method. Use :range or :voronoi."))
     end
