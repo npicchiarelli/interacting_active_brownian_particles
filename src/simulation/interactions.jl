@@ -94,30 +94,88 @@ function get_force_from_adjacency(adjacency::Set{Tuple{Int64, Int64}}, xy::Array
     return ΣFtot
 end
 
+# Periodic images of the particles that fall less than m outside the box [-L/2, L/2]², corners included.
+# Returns their positions and, for each image, its particle and shift in box lengths.
+function periodic_images(xy::Array{Float64, 2}, L::Real, m::Real)
+    n = ceil(Int, m/L)   # box lengths spanned by the margin
+    W = L/2 + m
+    xs, ys, images = Float64[], Float64[], NTuple{3,Int}[]
+    for k in axes(xy, 1), sx in -n:n, sy in -n:n
+        (sx == 0 && sy == 0) && continue
+        x = xy[k,1] + sx*L
+        y = xy[k,2] + sy*L
+        if abs(x) < W && abs(y) < W
+            push!(xs, x); push!(ys, y); push!(images, (k, sx, sy))
+        end
+    end
+    return xs, ys, images
+end
+
+# Voronoi tessellation of the particles in the periodic box, with the images needed for the cells of the particles
+# to be exactly the periodic ones. A point cuts the cell of particle i only if it lies within |v - xᵢ| of one of its
+# vertices v, so the images are added until none is missing from these disks. Starts from the images within `margin`
+# of the box. Returns the tessellation, the positions of all the generators (the Np particles first) and the
+# particle of each generator.
+function periodic_voronoi(xy::Array{Float64, 2}, L::Real; margin::Real = 5L/sqrt(size(xy,1)))
+    Np = size(xy, 1)
+    m = min(margin, 1.5L)   # wider margins are never needed and would not fit in the rectangle
+    W0 = L/2 + m        # all the images inside this square are present
+    Wr = L/2 + 2L       # tessellation rectangle; a cell bounded by the images of its own particle stays within L/2 + 1.71L
+    rect = Rectangle(Point2(-Wr, -Wr), Point2(Wr, Wr))
+    xs, ys, images = periodic_images(xy, L, m)
+    xs = vcat(xy[:,1], xs); ys = vcat(xy[:,2], ys)
+    sources = vcat(1:Np, first.(images))
+    added = Set{NTuple{3,Int}}()
+    added_now = NTuple{3,Int}[]   # images added since the last tessellation
+    present(k, sx, sy) = (sx == 0 && sy == 0) || (abs(xy[k,1] + sx*L) < W0 && abs(xy[k,2] + sy*L) < W0) || (k, sx, sy) in added
+    function add!(k, sx, sy)
+        push!(xs, xy[k,1] + sx*L); push!(ys, xy[k,2] + sy*L); push!(sources, k); push!(added, (k, sx, sy)); push!(added_now, (k, sx, sy))
+    end
+    while true
+        tess = voronoicells(xy_to_points([xs ys]), rect)
+        empty!(added_now)
+        for i in 1:Np
+            cell = tess.Cells[i]
+            # A cell clipped by the rectangle, or with disks leaving it, is bounded by the images of its own particle
+            if any(v -> max(abs(v[1]), abs(v[2])) + sqrt((v[1]-xy[i,1])^2 + (v[2]-xy[i,2])^2) >= Wr, cell)
+                for sx in -1:1, sy in -1:1
+                    present(i, sx, sy) || add!(i, sx, sy)
+                end
+                # with its own images in the tessellation the cell lies within L/2 of the particle, so this cannot happen
+                any(k -> k[1] == i, added_now) || error("periodic_voronoi: cell $i is not bounded by the images of its particle")
+                continue
+            end
+            for v in cell
+                r2 = (v[1]-xy[i,1])^2 + (v[2]-xy[i,2])^2
+                r = sqrt(r2)
+                # disks inside W0 hold no missing image
+                max(abs(v[1]), abs(v[2])) + r < W0 - 1e-9*L && continue
+                for k in 1:Np
+                    for sx in ceil(Int, (v[1] - r - xy[k,1])/L):floor(Int, (v[1] + r - xy[k,1])/L),
+                        sy in ceil(Int, (v[2] - r - xy[k,2])/L):floor(Int, (v[2] + r - xy[k,2])/L)
+                        present(k, sx, sy) && continue
+                        # slightly widened disk: an extra image does not change the cell, a missing one would
+                        if (xy[k,1] + sx*L - v[1])^2 + (xy[k,2] + sy*L - v[2])^2 < r2*(1 + 1e-9)
+                            add!(k, sx, sy)
+                        end
+                    end
+                end
+            end
+        end
+        isempty(added_now) && return tess, [xs ys], sources
+    end
+end
+
 function interaction_voronoi(xy::Array{Float64, 2}, θ::Array{Float64,1}, oc_length::Float64, L::Real, Np::Int, int_func::Function, int_params...)
-    #Step 1: Get the tessellation
+    # Step 1: Get the periodic tessellation
+    tess, xy_pp, sources = periodic_voronoi(xy, L)
+    θ_pp = θ[sources]
 
-    rect = Rectangle(Point2(-L/2, -L/2), Point2(L/2, L/2))
+    # Step 2: Get the adjacency from the periodic tessellation
+    adjacency = get_adjacency_from_points(tess.Cells, Np)
 
-    tess = voronoicells(xy_to_points(xy), rect)
-
-    # Step 2: Get the periodic projection of the tessellation
-
-    xy_periodic_projection, proj_inds = find_boundary_points(xy, tess.Cells)
-    θ_pp = vcat(θ, θ[proj_inds])
-    xy_periodic_projection = vcat(xy, xy_periodic_projection)
-
-    # Get the rectangle of the periodic projection
-    minpoint = Point2(minimum(xy_periodic_projection[:,1]), minimum(xy_periodic_projection[:,2]))
-    maxpoint = Point2(maximum(xy_periodic_projection[:,1]), maximum(xy_periodic_projection[:,2]))
-    rect_periodic = Rectangle(minpoint, maxpoint)
-    tess_periodic = voronoicells(xy_to_points(xy_periodic_projection), rect_periodic)
-
-    # Step 3: Get the adjacency from the periodic tessellation
-    adjacency = get_adjacency_from_points(tess_periodic.Cells, Np)
-    
-    #Step 4: Compute the forces
-    xy_pp_oc = xy_periodic_projection .+ oc_length* [cos.(θ_pp) sin.(θ_pp)]
+    # Step 3: Compute the forces
+    xy_pp_oc = xy_pp .+ oc_length* [cos.(θ_pp) sin.(θ_pp)]
     return get_force_from_adjacency(adjacency, xy_pp_oc, Np, int_func, int_params...)
 end
 
