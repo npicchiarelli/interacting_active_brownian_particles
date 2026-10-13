@@ -292,82 +292,41 @@ function round_point(p::Point{2,Float64}, tol=1e-8)
 end
 
 """
-    get_adjacency_from_points(cells::Vector{Vector{Point{2,Float64}}}; tol=1e-8)
+    get_adjacency_from_points(cells::Vector{Vector{Point{2,Float64}}}, Np::Int; tol=1e-8)
 
-Returns a set of tuples representing the adjacency of Voronoi cells with particles at their centers.
+Returns a set of tuples representing the adjacency of Voronoi cells with particles at their centers, for the pairs
+that include at least one of the first Np cells.
 """
 function get_adjacency_from_points(cells::Vector{Vector{Point{2,Float64}}}, Np::Int; tol=1e-8)
-    # Step 1: Normalize and index all unique points
+    digits = ceil(Int, -log10(tol))
+    # Step 1: Index the vertices of the first Np cells; the other cells can share edges with them only through these
     point_to_index = Dict{Point{2,Float64}, Int}()
-    index_counter = 1
+    for i in 1:Np, p in cells[i]
+        get!(point_to_index, Point(round.(p, digits=digits)), length(point_to_index) + 1)
+    end
 
-    normalized_cells = Vector{Vector{Int}}(undef, length(cells))
-
-    for (i, cell) in enumerate(cells)
-        normalized_cell = Int[]
+    # Step 2: Build edge -> cell map, for the edges between indexed vertices
+    edge_map = Dict{Tuple{Int,Int}, Vector{Int}}()
+    for (cell_id, cell) in enumerate(cells)
+        isempty(cell) && continue
+        prev = get(point_to_index, Point(round.(cell[end], digits=digits)), 0)  # wrap around
         for p in cell
-            rp = Point(round_point(p, tol))
-            if !haskey(point_to_index, rp)
-                point_to_index[rp] = index_counter
-                index_counter += 1
+            v = get(point_to_index, Point(round.(p, digits=digits)), 0)
+            if prev != 0 && v != 0
+                push!(get!(() -> Int[], edge_map, minmax(prev, v)), cell_id)
             end
-            push!(normalized_cell, point_to_index[rp])
-        end
-        normalized_cells[i] = normalized_cell
-    end
-
-    # Step 2: Build edge -> cell map
-    edge_map = Dict{Set{Int}, Vector{Int}}()
-
-    for (cell_id, verts) in enumerate(normalized_cells)
-        n = length(verts)
-        for i in 1:n
-            v1 = verts[i]
-            v2 = verts[mod1(i+1, n)]  # wrap around
-            edge = Set([v1, v2])
-            edge_map[edge] = get(edge_map, edge, Int[])
-            push!(edge_map[edge], cell_id)
+            prev = v
         end
     end
 
-    # Remove edges between two points if both points are outside of the simulation box
-    # This is done by checking if both points are greater than the center length
-
-    for (key, points) in collect(edge_map)
-        if all(points .> Np)
-            delete!(edge_map, key)
-        end
-    end
-
-    # Step 3: Extract adjacency
+    # Step 3: Extract adjacency, leaving out the edges between two points outside of the simulation box
     adjacency = Set{Tuple{Int, Int}}()
     for ids in values(edge_map)
-        if length(ids) == 2
+        if length(ids) == 2 && min(ids[1], ids[2]) <= Np
             i, j = sort(ids)
             push!(adjacency, (i, j))
         end
     end
 
     return adjacency
-end
-
-"""
-    find_boundary_points(cells::Vector{Vector{Point{2,Float64}}})
-
-Finds the boundary points of Voronoi cells that are outside the simulation box and returns their periodic projections.
-"""
-function find_boundary_points(xy::Array{Float64, 2}, cells)
-    xy_periodic_projection = Array{Float64, 2}(undef, 0, 2)
-    proj_inds = Array{Int, 1}(undef, 0)
-    for (i, cell) in enumerate(points_to_xy.(cells))
-        if any(abs.(cell[:,1]) .== L/2)
-            xy_periodic_projection = vcat(xy_periodic_projection, [xy[i,1] - sign(xy[i,1])*L xy[i,2]])
-            push!(proj_inds, i)
-            end
-        if any(abs.(cell[:,2]) .== L/2)
-            xy_periodic_projection = vcat(xy_periodic_projection, [xy[i,1] xy[i,2] - sign(xy[i,2])*L])
-            push!(proj_inds, i)
-        end
-    end
-    return xy_periodic_projection, proj_inds
 end
